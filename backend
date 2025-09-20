@@ -1,0 +1,242 @@
+import os
+import bcrypt
+from datetime import date
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import psycopg2
+from dotenv import load_dotenv
+
+# Load environment variables for database connection
+load_dotenv()
+
+app = Flask(__name__)
+CORS(app)  # Enable Cross-Origin Resource Sharing
+
+# Database connection function
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(
+            host=os.environ.get("localhost"),
+            database=os.environ.get("PMS"),
+            user=os.environ.get("postgres"),
+            password=os.environ.get("Ximecollegerocks"),
+            port=os.environ.get("5432")
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        print(f"Error connecting to database: {e}")
+        return None
+
+# User authentication (simplified for this example)
+def authenticate_user(username, password):
+    conn = get_db_connection()
+    if conn is None: return None
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, password_hash, role FROM users WHERE username = %s", (username,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    if user and bcrypt.checkpw(password.encode('utf-8'), user[1].encode('utf-8')):
+        return {'user_id': user[0], 'role': user[2]}
+    return None
+
+# --- API Endpoints ---
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    user = authenticate_user(username, password)
+    if user:
+        return jsonify({'message': 'Login successful', 'user_id': user['user_id'], 'role': user['role']}), 200
+    return jsonify({'message': 'Invalid credentials'}), 401
+
+@app.route('/goals', methods=['GET'])
+def get_goals():
+    user_id = request.args.get('user_id')
+    role = request.args.get('role')
+    conn = get_db_connection()
+    if conn is None: return jsonify({'error': 'Database connection failed'}), 500
+    cur = conn.cursor()
+    if role == 'manager':
+        cur.execute("SELECT g.*, u.username FROM goals g JOIN users u ON g.employee_id = u.user_id WHERE g.manager_id = %s", (user_id,))
+    else:  # employee
+        cur.execute("SELECT * FROM goals WHERE employee_id = %s", (user_id,))
+    goals = cur.fetchall()
+    cur.close()
+    conn.close()
+    goal_list = [{'goal_id': g[0], 'description': g[1], 'due_date': str(g[2]), 'status': g[3], 'employee_id': g[4]} for g in goals]
+    return jsonify(goal_list)
+
+@app.route('/goals', methods=['POST'])
+def create_goal():
+    data = request.json
+    manager_id = data.get('manager_id')
+    employee_id = data.get('employee_id')
+    description = data.get('description')
+    due_date = data.get('due_date')
+    status = 'draft'
+    conn = get_db_connection()
+    if conn is None: return jsonify({'error': 'Database connection failed'}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO goals (description, due_date, status, employee_id, manager_id) VALUES (%s, %s, %s, %s, %s) RETURNING goal_id", (description, due_date, status, employee_id, manager_id))
+        goal_id = cur.fetchone()[0]
+        conn.commit()
+        return jsonify({'message': 'Goal created successfully', 'goal_id': goal_id}), 201
+    except psycopg2.Error as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/goals/<int:goal_id>/status', methods=['PUT'])
+def update_goal_status(goal_id):
+    data = request.json
+    new_status = data.get('status')
+    conn = get_db_connection()
+    if conn is None: return jsonify({'error': 'Database connection failed'}), 500
+    cur = conn.cursor()
+    try:
+        # Check if the user making the request is the manager of the goal
+        # (Simplified, a real system would check a session token)
+        cur.execute("UPDATE goals SET status = %s WHERE goal_id = %s", (new_status, goal_id))
+        conn.commit()
+        return jsonify({'message': 'Goal status updated successfully'}), 200
+    except psycopg2.Error as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/tasks', methods=['POST'])
+def create_task():
+    data = request.json
+    description = data.get('description')
+    goal_id = data.get('goal_id')
+    employee_id = data.get('employee_id')
+    manager_id = data.get('manager_id')
+    status = 'pending_approval'
+    conn = get_db_connection()
+    if conn is None: return jsonify({'error': 'Database connection failed'}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO tasks (description, status, goal_id, employee_id, manager_id) VALUES (%s, %s, %s, %s, %s) RETURNING task_id", (description, status, goal_id, employee_id, manager_id))
+        task_id = cur.fetchone()[0]
+        conn.commit()
+        return jsonify({'message': 'Task submitted for approval', 'task_id': task_id}), 201
+    except psycopg2.Error as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/tasks', methods=['GET'])
+def get_tasks():
+    goal_id = request.args.get('goal_id')
+    conn = get_db_connection()
+    if conn is None: return jsonify({'error': 'Database connection failed'}), 500
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM tasks WHERE goal_id = %s", (goal_id,))
+    tasks = cur.fetchall()
+    cur.close()
+    conn.close()
+    task_list = [{'task_id': t[0], 'description': t[1], 'status': t[2], 'goal_id': t[3]} for t in tasks]
+    return jsonify(task_list)
+
+@app.route('/feedback', methods=['POST'])
+def give_feedback():
+    data = request.json
+    manager_id = data.get('manager_id')
+    employee_id = data.get('employee_id')
+    goal_id = data.get('goal_id')
+    feedback_text = data.get('feedback_text')
+    conn = get_db_connection()
+    if conn is None: return jsonify({'error': 'Database connection failed'}), 500
+    cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO feedback (manager_id, employee_id, goal_id, feedback_text) VALUES (%s, %s, %s, %s)", (manager_id, employee_id, goal_id, feedback_text))
+        conn.commit()
+        return jsonify({'message': 'Feedback submitted successfully'}), 201
+    except psycopg2.Error as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/reports/<int:employee_id>', methods=['GET'])
+def get_performance_history(employee_id):
+    conn = get_db_connection()
+    if conn is None: return jsonify({'error': 'Database connection failed'}), 500
+    cur = conn.cursor()
+    
+    # Get all goals for the employee, including tasks and feedback
+    cur.execute("""
+        SELECT
+            g.goal_id, g.description as goal_description, g.due_date, g.status as goal_status,
+            t.task_id, t.description as task_description, t.status as task_status,
+            f.feedback_id, f.feedback_text
+        FROM goals g
+        LEFT JOIN tasks t ON g.goal_id = t.goal_id
+        LEFT JOIN feedback f ON g.goal_id = f.goal_id
+        WHERE g.employee_id = %s
+        ORDER BY g.due_date DESC, t.task_id, f.feedback_id;
+    """, (employee_id,))
+    
+    records = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    # Structure the data for the frontend
+    report = []
+    current_goal_id = None
+    current_goal = None
+    
+    for row in records:
+        goal_id, goal_desc, due_date, goal_status, task_id, task_desc, task_status, feedback_id, feedback_text = row
+        
+        if goal_id != current_goal_id:
+            if current_goal:
+                report.append(current_goal)
+            
+            current_goal = {
+                'goal_id': goal_id,
+                'description': goal_desc,
+                'due_date': str(due_date),
+                'status': goal_status,
+                'tasks': [],
+                'feedback': []
+            }
+            current_goal_id = goal_id
+            
+        if task_id and {'task_id': task_id} not in [t for t in current_goal['tasks']]:
+            current_goal['tasks'].append({
+                'task_id': task_id,
+                'description': task_desc,
+                'status': task_status
+            })
+            
+        if feedback_id and {'feedback_id': feedback_id} not in [f for f in current_goal['feedback']]:
+            current_goal['feedback'].append({
+                'feedback_id': feedback_id,
+                'text': feedback_text
+            })
+
+    if current_goal:
+        report.append(current_goal)
+
+    return jsonify(report)
+
+if __name__ == '__main__':
+    # To use this, you need a .env file with your DB credentials:
+    # DB_HOST=localhost
+    # DB_NAME=pms_db
+    # DB_USER=your_user
+    # DB_PASSWORD=your_password
+    # DB_PORT=5432
+    app.run(debug=True, host='0.0.0.0', port=5000)
