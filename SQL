@@ -1,0 +1,73 @@
+-- Create a new database for the PMS
+CREATE DATABASE pms_db;
+
+-- Connect to the new database
+\c pms;_db
+
+-- Connect to the new database
+-- Note: The `\c pms_db;` command is for the psql terminal and must be run separately.
+-- The following SQL code assumes you are already connected to 'pms_db'.
+
+-- 1. Users Table: To store information about managers and employees
+CREATE TABLE users (
+    user_id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL CHECK (role IN ('manager', 'employee')),
+    manager_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+-- 2. Goals Table: To store individual goals
+CREATE TABLE goals (
+    goal_id SERIAL PRIMARY KEY,
+    description TEXT NOT NULL,
+    due_date DATE NOT NULL,
+    status VARCHAR(50) NOT NULL CHECK (status IN ('draft', 'in progress', 'completed', 'cancelled')),
+    employee_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    manager_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+-- 3. Tasks Table: To store tasks associated with goals
+CREATE TABLE tasks (
+    task_id SERIAL PRIMARY KEY,
+    description TEXT NOT NULL,
+    status VARCHAR(50) NOT NULL CHECK (status IN ('draft', 'pending_approval', 'approved', 'rejected', 'completed')),
+    goal_id INTEGER NOT NULL REFERENCES goals(goal_id) ON DELETE CASCADE,
+    employee_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    manager_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+-- 4. Feedback Table: To store feedback from managers
+CREATE TABLE feedback (
+    feedback_id SERIAL PRIMARY KEY,
+    manager_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    employee_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    goal_id INTEGER REFERENCES goals(goal_id) ON DELETE SET NULL,
+    feedback_text TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create a function to log feedback when a goal status is updated to 'completed'
+CREATE OR REPLACE FUNCTION log_automated_feedback()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.status = 'completed' AND OLD.status != 'completed' THEN
+        INSERT INTO feedback (manager_id, employee_id, goal_id, feedback_text)
+        VALUES (
+            NEW.manager_id,
+            NEW.employee_id,
+            NEW.goal_id,
+            'Automated feedback: Goal "' || NEW.description || '" was successfully completed.'
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create a trigger that executes the function after an update on the goals table
+CREATE TRIGGER automated_feedback_trigger
+AFTER UPDATE ON goals
+FOR EACH ROW
+EXECUTE FUNCTION log_automated_feedback();
+
+
