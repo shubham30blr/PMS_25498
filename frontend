@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance Management System</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; }
+        .container { max-width: 800px; margin: 0 auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .hidden { display: none; }
+        h1, h2 { color: #333; }
+        label { display: block; margin-top: 10px; }
+        input[type="text"], input[type="password"], textarea, select, input[type="date"] { width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; }
+        button { background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; }
+        button:hover { background-color: #0056b3; }
+        .goal-item, .report-item { border: 1px solid #ddd; padding: 15px; margin-top: 15px; border-radius: 6px; }
+        .goal-item h3 { margin-top: 0; }
+        .report-item ul, .goal-item ul { list-style-type: none; padding: 0; }
+        .report-item li, .goal-item li { margin-bottom: 5px; }
+        .status-draft { color: #888; }
+        .status-in-progress { color: #ff9800; }
+        .status-completed { color: green; }
+        .status-cancelled { color: red; }
+    </style>
+</head>
+<body>
+
+    <div id="login-form" class="container">
+        <h2>Login</h2>
+        <label for="username">Username:</label>
+        <input type="text" id="username" name="username">
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password">
+        <button onclick="login()">Login</button>
+        <p id="login-message"></p>
+    </div>
+
+    <div id="dashboard" class="container hidden">
+        <h1 id="welcome-message"></h1>
+        <button onclick="logout()">Logout</button>
+        
+        <div id="manager-section" class="hidden">
+            <h2>Manager Dashboard</h2>
+            <h3>Set a New Goal</h3>
+            <label for="employee-id">Employee ID:</label>
+            <input type="text" id="employee-id">
+            <label for="goal-description">Goal Description:</label>
+            <textarea id="goal-description"></textarea>
+            <label for="due-date">Due Date:</label>
+            <input type="date" id="due-date">
+            <button onclick="createGoal()">Set Goal</button>
+
+            <h3>My Team's Goals</h3>
+            <div id="manager-goals"></div>
+        </div>
+
+        <div id="employee-section" class="hidden">
+            <h2>Employee Dashboard</h2>
+            <h3>My Goals</h3>
+            <div id="employee-goals"></div>
+        </div>
+        
+        <div id="reporting-section" class="hidden">
+            <h2>Reporting</h2>
+            <h3>Performance History</h3>
+            <div id="performance-history"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000';
+        let currentUser = null;
+
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            const response = await fetch(`${API_URL}/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await response.json();
+            const messageEl = document.getElementById('login-message');
+
+            if (response.ok) {
+                messageEl.textContent = 'Login successful!';
+                currentUser = { id: data.user_id, role: data.role };
+                document.getElementById('login-form').classList.add('hidden');
+                document.getElementById('dashboard').classList.remove('hidden');
+                document.getElementById('welcome-message').textContent = `Welcome, ${username}! (${data.role})`;
+                
+                if (data.role === 'manager') {
+                    document.getElementById('manager-section').classList.remove('hidden');
+                    loadManagerGoals();
+                } else {
+                    document.getElementById('employee-section').classList.remove('hidden');
+                    loadEmployeeGoals();
+                }
+                
+                loadPerformanceHistory(currentUser.id);
+            } else {
+                messageEl.textContent = data.message;
+            }
+        }
+
+        async function logout() {
+            currentUser = null;
+            document.getElementById('login-form').classList.remove('hidden');
+            document.getElementById('dashboard').classList.add('hidden');
+            document.getElementById('manager-section').classList.add('hidden');
+            document.getElementById('employee-section').classList.add('hidden');
+            document.getElementById('performance-history').innerHTML = '';
+            document.getElementById('login-message').textContent = '';
+        }
+
+        async function createGoal() {
+            const employeeId = document.getElementById('employee-id').value;
+            const description = document.getElementById('goal-description').value;
+            const dueDate = document.getElementById('due-date').value;
+            
+            const response = await fetch(`${API_URL}/goals`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    manager_id: currentUser.id,
+                    employee_id: employeeId,
+                    description,
+                    due_date: dueDate
+                })
+            });
+            
+            if (response.ok) {
+                alert('Goal created successfully!');
+                loadManagerGoals(); // Refresh the list
+            } else {
+                alert('Failed to create goal.');
+            }
+        }
+
+        async function loadManagerGoals() {
+            const goalsContainer = document.getElementById('manager-goals');
+            goalsContainer.innerHTML = 'Loading goals...';
+            const response = await fetch(`${API_URL}/goals?user_id=${currentUser.id}&role=manager`);
+            const goals = await response.json();
+            goalsContainer.innerHTML = '';
+            
+            goals.forEach(goal => {
+                const goalDiv = document.createElement('div');
+                goalDiv.className = 'goal-item';
+                goalDiv.innerHTML = `
+                    <h3>${goal.description}</h3>
+                    <p><strong>Employee:</strong> ${goal.username}</p>
+                    <p><strong>Due Date:</strong> ${goal.due_date}</p>
+                    <p><strong>Status:</strong> <span class="status-${goal.status.replace(' ', '-')}">${goal.status.charAt(0).toUpperCase() + goal.status.slice(1)}</span></p>
+                    <label for="status-select-${goal.goal_id}">Change Status:</label>
+                    <select id="status-select-${goal.goal_id}">
+                        <option value="draft">Draft</option>
+                        <option value="in progress">In Progress</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                    <button onclick="updateGoalStatus(${goal.goal_id})">Update Status</button>
+                `;
+                goalsContainer.appendChild(goalDiv);
+            });
+        }
+        
+        async function updateGoalStatus(goalId) {
+            const newStatus = document.getElementById(`status-select-${goalId}`).value;
+            const response = await fetch(`${API_URL}/goals/${goalId}/status`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus })
+            });
+            if (response.ok) {
+                alert('Status updated!');
+                loadManagerGoals();
+                loadPerformanceHistory(currentUser.id); // Refresh reports to see the change
+            } else {
+                alert('Failed to update status.');
+            }
+        }
+
+        async function loadEmployeeGoals() {
+            const goalsContainer = document.getElementById('employee-goals');
+            goalsContainer.innerHTML = 'Loading goals...';
+            const response = await fetch(`${API_URL}/goals?user_id=${currentUser.id}&role=employee`);
+            const goals = await response.json();
+            goalsContainer.innerHTML = '';
+            
+            goals.forEach(goal => {
+                const goalDiv = document.createElement('div');
+                goalDiv.className = 'goal-item';
+                goalDiv.innerHTML = `
+                    <h3>${goal.description}</h3>
+                    <p><strong>Due Date:</strong> ${goal.due_date}</p>
+                    <p><strong>Status:</strong> <span class="status-${goal.status.replace(' ', '-')}">${goal.status.charAt(0).toUpperCase() + goal.status.slice(1)}</span></p>
+                    <label>Task Description:</label>
+                    <input type="text" id="task-desc-${goal.goal_id}">
+                    <button onclick="submitTask(${goal.goal_id})">Add Task</button>
+                    <div id="tasks-${goal.goal_id}"></div>
+                `;
+                goalsContainer.appendChild(goalDiv);
+                loadTasksForGoal(goal.goal_id);
+            });
+        }
+        
+        async function submitTask(goalId) {
+            const taskDesc = document.getElementById(`task-desc-${goalId}`).value;
+            const response = await fetch(`${API_URL}/tasks`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    description: taskDesc,
+                    goal_id: goalId,
+                    employee_id: currentUser.id,
+                    manager_id: 1 // For simplicity, manager_id is hardcoded here
+                })
+            });
+            if (response.ok) {
+                alert('Task submitted for approval!');
+                loadTasksForGoal(goalId);
+            } else {
+                alert('Failed to submit task.');
+            }
+        }
+        
+        async function loadTasksForGoal(goalId) {
+            const tasksContainer = document.getElementById(`tasks-${goalId}`);
+            tasksContainer.innerHTML = 'Loading tasks...';
+            const response = await fetch(`${API_URL}/tasks?goal_id=${goalId}`);
+            const tasks = await response.json();
+            tasksContainer.innerHTML = '<h4>Tasks:</h4>';
+            
+            if (tasks.length > 0) {
+                const ul = document.createElement('ul');
+                tasks.forEach(task => {
+                    const li = document.createElement('li');
+                    li.textContent = `${task.description} (${task.status})`;
+                    ul.appendChild(li);
+                });
+                tasksContainer.appendChild(ul);
+            } else {
+                tasksContainer.innerHTML += '<p>No tasks added yet.</p>';
+            }
+        }
+
+        async function loadPerformanceHistory(employeeId) {
+            const historyContainer = document.getElementById('performance-history');
+            historyContainer.classList.remove('hidden');
+            historyContainer.innerHTML = 'Loading performance history...';
+            
+            const response = await fetch(`${API_URL}/reports/${employeeId}`);
+            const report = await response.json();
+            historyContainer.innerHTML = '';
+            
+            if (report.length > 0) {
+                report.forEach(goal => {
+                    const goalDiv = document.createElement('div');
+                    goalDiv.className = 'report-item';
+                    goalDiv.innerHTML = `
+                        <h3>Goal: ${goal.description}</h3>
+                        <p><strong>Status:</strong> <span class="status-${goal.status.replace(' ', '-')}">${goal.status}</span></p>
+                        <p><strong>Due Date:</strong> ${goal.due_date}</p>
+                    `;
+                    
+                    const tasksUl = document.createElement('ul');
+                    tasksUl.innerHTML = '<h4>Tasks:</h4>';
+                    if (goal.tasks && goal.tasks.length > 0) {
+                        goal.tasks.forEach(task => {
+                            const li = document.createElement('li');
+                            li.textContent = `${task.description} (${task.status})`;
+                            tasksUl.appendChild(li);
+                        });
+                    } else {
+                        tasksUl.innerHTML += '<li>No tasks found.</li>';
+                    }
+                    goalDiv.appendChild(tasksUl);
+                    
+                    const feedbackUl = document.createElement('ul');
+                    feedbackUl.innerHTML = '<h4>Feedback:</h4>';
+                    if (goal.feedback && goal.feedback.length > 0) {
+                        goal.feedback.forEach(fb => {
+                            const li = document.createElement('li');
+                            li.textContent = fb.text;
+                            feedbackUl.appendChild(li);
+                        });
+                    } else {
+                        feedbackUl.innerHTML += '<li>No feedback found.</li>';
+                    }
+                    goalDiv.appendChild(feedbackUl);
+                    
+                    historyContainer.appendChild(goalDiv);
+                });
+            } else {
+                historyContainer.innerHTML = '<p>No performance history available.</p>';
+            }
+        }
+    </script>
+
+</body>
+</html>
